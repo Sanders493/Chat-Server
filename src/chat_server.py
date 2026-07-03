@@ -134,7 +134,32 @@ async def run_whoami_cmd(writer, username):
 
     writer.write(message.encode())
     await writer.drain()
-        
+
+async def run_help_cmd(writer):
+    """Run the operations associated with the help command"""
+    help_text = (
+        "\n"
+        "================ Chat Commands ================\n\n"
+        "/help\n"
+        "    Show this help menu.\n\n"
+        "/list\n"
+        "    Display all users currently connected.\n\n"
+        "/users\n"
+        "    Same as /list command\n\n"
+        "/whoami\n"
+        "    Display your current username.\n\n"
+        "/msg <username> <message>\n"
+        "    Send a private message to another user.\n\n"
+        "    Example:\n"
+        "        /msg Alice Hello!\n\n"
+        "/quit\n"
+        "    Disconnect from the chat server.\n\n"
+        "===============================================\n"
+    )
+
+    writer.write(help_text.encode())
+    await writer.drain()  
+          
 async def remove_user_from_client_ls(username):
     """ Remove a user from the client list"""  
     for client in clients:
@@ -169,12 +194,12 @@ async def handle_client(reader, writer):
             
             if message.startswith("/msg"):
                 await run_msg_cmd(message, writer, username)
-            elif message.startswith("/list"):
+            elif message.startswith("/list") or message.startswith("/users"):
                 await run_list_cmd(writer)
             elif message.startswith("/whoami"):
                 await run_whoami_cmd(writer, username)
             elif message.startswith("/help"):
-                pass
+                await run_help_cmd(writer)
             elif message.startswith("/quit"):
                 return
             else:
