@@ -115,7 +115,26 @@ async def run_msg_cmd(message, writer, sender):
     recipient = message_parts[1]
     private_message = message_parts[2]
     await send_pm(private_message, writer, sender, recipient)
+
+async def run_list_cmd(writer):
+    """Run the operations associated with the /list command"""
     
+    message = "Online users:\n"
+    
+    for client in clients:
+        message += client.username + "\n"
+        
+    writer.write(message.encode())
+    await writer.drain()
+ 
+async def run_whoami_cmd(writer, username):
+    """Run the operations associated with the /whoami command"""
+    
+    message = f"You are {username}\n"
+
+    writer.write(message.encode())
+    await writer.drain()
+        
 async def remove_user_from_client_ls(username):
     """ Remove a user from the client list"""  
     for client in clients:
@@ -151,9 +170,9 @@ async def handle_client(reader, writer):
             if message.startswith("/msg"):
                 await run_msg_cmd(message, writer, username)
             elif message.startswith("/list"):
-                pass
+                await run_list_cmd(writer)
             elif message.startswith("/whoami"):
-                pass
+                await run_whoami_cmd(writer, username)
             elif message.startswith("/help"):
                 pass
             elif message.startswith("/quit"):
