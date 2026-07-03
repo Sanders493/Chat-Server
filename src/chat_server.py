@@ -26,7 +26,7 @@ async def broadcast(message, username):
         for client in dead_clients:
             clients.remove(client)
         
-async def get_username(reader, writer):
+async def get_username(reader, writer) -> str:
     """Get the username of a client"""
     
     while True:
@@ -48,7 +48,7 @@ async def get_username(reader, writer):
         if re.fullmatch(r"^[a-zA-Z0-9]{2,12}$", username):
             return username
         else:
-            writer.write(f"{username} is not a valid username".encode())
+            writer.write(f"{username} is not a valid username\n".encode())
             await writer.drain()
             continue
   
@@ -67,14 +67,56 @@ async def user_farewell(writer, username, addr):
     await remove_user_from_client_ls(username)
     writer.close()
     await writer.wait_closed()
-    
 
+async def send_pm(message, writer, sender_name, receiver_name):
+    """Send a private message to a specific user"""
+    
+    if sender_name == receiver_name:
+        writer.write(b"You can't send a private message to yourself.\n")
+        await writer.drain()
+        return
+    
+    receiver = next(
+        (client for client in clients if client.name == receiver_name),
+        None)
+    
+    if not receiver:
+        writer.write(b"User not found\n")
+        await writer.drain()
+        return
+    
+    formatted = f"[PM] {sender_name}: {message}\n".encode()
+    
+    try:
+        receiver.writer.write(formatted)
+        await receiver.writer.drain()
+        
+        writer.write(f"[PM to {receiver_name}] {message}\n".encode())
+        await writer.drain()
+        
+    except OSError:
+        writer.write(b"Failed to send private message.\n")
+        await writer.drain()
+       
+async def run_msg_cmd(message, writer, sender):
+    """Run the operations associated with the /msg command"""
+    
+    message_parts = message.split(maxsplit=2)
+    
+    if len(message_parts) != 3:
+        writer.write(b"Usage: /msg <username> <message>\n")
+        await writer.drain()
+        return
+    
+    recipient = message_parts[1]
+    private_message = message_parts[2]
+    await send_pm(private_message, writer, sender, recipient)
+    
 async def remove_user_from_client_ls(username):
     """ Remove a user from the client list"""  
     for client in clients:
         if client.username == username:
             clients.remove(client)
-
   
 async def handle_client(reader, writer):
     """ Handle a new client 
@@ -102,6 +144,8 @@ async def handle_client(reader, writer):
             message = data.decode().strip()
             print(f"{username}: {message}")
             
+            if message.startswith("/msg"):
+                await run_msg_cmd(message, writer, username)
             formatted = f"{username}: {message}\n".encode()
             await broadcast(formatted, username)
             
@@ -111,7 +155,6 @@ async def handle_client(reader, writer):
     finally:
         await user_farewell(writer, username, addr)
         
-
 async def run_server():
     """ Runs a server on the Host using the port """
     server = await asyncio.start_server(
