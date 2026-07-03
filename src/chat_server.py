@@ -1,14 +1,19 @@
 import asyncio
 import re
 from client import Client
+import json
 
-HOST = "192.168.1.168"
-PORT = 8000
-SERVER_PASSWORD = "SuperSanders193"
+with open("config-files/config.json") as f:
+    config = json.load(f)
+
+HOST = config["host"]
+PORT = config["port"]
+SERVER_PASSWORD = config["server_password"]
 
 clients: list[Client] = []
 
 lock = asyncio.Lock()
+
 
 async def broadcast(message, username):
     """ Sends message to all clients except sender """
@@ -182,7 +187,7 @@ async def ask_for_server_password(reader, writer) -> bool:
         if password == SERVER_PASSWORD:
             return True
 
-        writer.write(f"ACCESS DENIED: Incorrect password ({attempt + 1}/{MAX_ATTEMPTS})\n".encode())
+        writer.write(f"ACCESS DENIED: Incorrect password ({attempt}/{MAX_ATTEMPTS})\n".encode())
         await writer.drain()
 
     writer.write(b"Too many failed attempts.\n")
