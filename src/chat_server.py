@@ -2,7 +2,7 @@ import asyncio
 import re
 from client import Client
 
-HOST = "192.0.0.2"
+HOST = "192.168.1.168"
 PORT = 8000
 
 clients: list[Client] = []
@@ -35,23 +35,27 @@ async def get_username(reader, writer) -> str:
         
         data = await reader.readline()
         if not data:
-            continue
+            raise ConnectionError("Client disconnected")
         
         username = data.decode().strip()
         
-        for client in clients:
-            if client.username == username:
-                writer.write(b"Username already taken.\n")
-                await writer.drain()
-                continue
-        
-        if re.fullmatch(r"^[a-zA-Z0-9]{2,12}$", username):
-            return username
-        else:
-            writer.write(f"{username} is not a valid username\n".encode())
+        if not username:
+            writer.write(b"Username cannot be empty.\n")
             await writer.drain()
             continue
-  
+        
+        if not re.fullmatch(r"^[a-zA-Z0-9]{2,20}$", username):
+            writer.write(b"Username must be 2-20 letters or digits.\n")
+            await writer.drain()
+            continue
+        
+        if any(client.username == username for client in clients):
+            writer.write(b"Username already taken.\n")
+            await writer.drain()
+            continue
+
+        return username
+
 async def greet_user(writer, username):
     """Greet the user with the appropriate message based on their username""" 
     
@@ -77,7 +81,7 @@ async def send_pm(message, writer, sender_name, receiver_name):
         return
     
     receiver = next(
-        (client for client in clients if client.name == receiver_name),
+        (client for client in clients if client.username == receiver_name),
         None)
     
     if not receiver:
@@ -146,8 +150,17 @@ async def handle_client(reader, writer):
             
             if message.startswith("/msg"):
                 await run_msg_cmd(message, writer, username)
-            formatted = f"{username}: {message}\n".encode()
-            await broadcast(formatted, username)
+            elif message.startswith("/list"):
+                pass
+            elif message.startswith("/whoami"):
+                pass
+            elif message.startswith("/help"):
+                pass
+            elif message.startswith("/quit"):
+                return
+            else:
+                formatted = f"{username}: {message}\n".encode()
+                await broadcast(formatted, username)
             
     except Exception as e:
         print(e)
