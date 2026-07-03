@@ -4,6 +4,7 @@ from client import Client
 
 HOST = "192.168.1.168"
 PORT = 8000
+SERVER_PASSWORD = "SuperSanders193"
 
 clients: list[Client] = []
 
@@ -159,7 +160,37 @@ async def run_help_cmd(writer):
 
     writer.write(help_text.encode())
     await writer.drain()  
-          
+  
+async def ask_for_server_password(reader, writer) -> bool:
+    """Ask the user for the server password before they can join."""
+
+    MAX_ATTEMPTS = 5
+    attempt = 0
+    
+    for _ in range(MAX_ATTEMPTS):
+        attempt += 1
+        writer.write(b"Server password: ")
+        await writer.drain()
+
+        data = await reader.readline()
+
+        if not data:
+            raise ConnectionError("Client disconnected")
+
+        password = data.decode().strip()
+
+        if password == SERVER_PASSWORD:
+            return True
+
+        writer.write(f"ACCESS DENIED: Incorrect password ({attempt + 1}/{MAX_ATTEMPTS})\n".encode())
+        await writer.drain()
+
+    writer.write(b"Too many failed attempts.\n")
+    await writer.drain()
+
+    return False
+    
+            
 async def remove_user_from_client_ls(username):
     """ Remove a user from the client list"""  
     for client in clients:
@@ -177,6 +208,12 @@ async def handle_client(reader, writer):
     try:
         addr = writer.get_extra_info("peername")   
         print(f"Connected: {addr}")
+        
+        access_granted = False
+        access_granted = await ask_for_server_password(reader, writer)
+        
+        if not access_granted:
+            return
         
         username = await get_username(reader, writer)
         
@@ -210,7 +247,12 @@ async def handle_client(reader, writer):
         print(e)
         
     finally:
-        await user_farewell(writer, username, addr)
+        if access_granted:
+            await user_farewell(writer, username, addr)
+        else:
+            print(f"Disconnected: {addr}")
+            writer.close()
+            await writer.wait_closed()
         
 async def run_server():
     """ Runs a server on the Host using the port """
