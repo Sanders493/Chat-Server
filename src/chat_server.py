@@ -1,14 +1,45 @@
 import asyncio
 import re
-import client
+from client import Client
 
 HOST = "192.0.0.3"
 PORT = 8000
 
-clients = []
+clients: list[Client] = []
 
 lock = asyncio.Lock()
 
+async def get_username(reader, writer):
+    """Get the username of a client"""
+    
+    while True:
+        writer.write(b"Enter a username: ")
+        await writer.drain()
+        
+        data = await reader.readline()
+        if not data:
+            continue
+        
+        username = data.decode().strip()
+        
+        for client in clients:
+            if client.username == username:
+                writer.write(b"Username already taken.\n")
+                await writer.drain()
+                continue
+        
+        if re.fullmatch(r"^[a-zA-Z0-9]{2,12}$", username):
+            return username
+        else:
+            writer.write(f"{username} is not a valid username".encode())
+            await writer.drain()
+            continue
+  
+async def greet_user(writer, username):
+    """Greet the user with the appropriate message based on their username""" 
+    
+    writer.write(f"Welcome to the chat {username}!\n".encode())
+    
 async def handle_client(reader, writer):
     """ Handle a new client 
 
@@ -16,11 +47,17 @@ async def handle_client(reader, writer):
         reader: the reader of the new client
         writer: the writer of the new client
     """
-    
-    addr = writer.get_extra_info("peername")   
-    print(f"Connected: {addr}")
-    
+       
     try:
+        addr = writer.get_extra_info("peername")   
+        print(f"Connected: {addr}")
+        
+        username = await get_username(reader, writer)
+        
+        clients.append(Client(reader, writer, username))
+        
+        await greet_user(writer, username)
+        
         while True:
             data = await reader.readline()
             if not data:
