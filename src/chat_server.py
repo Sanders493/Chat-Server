@@ -17,18 +17,24 @@ connected_clients: list[Client] = []
 
 lock = asyncio.Lock()
 
-async def load_clients_list(data_file_path: str):
+def load_users(data_file_path: str):
     """Load the clients dictionary with data from the json file"""
     global clients
+    try:
+        with open(data_file_path, "r") as data_file:
+            clients = json.load(data_file)
+    except FileNotFoundError:
+        clients = {}
+    except json.JSONDecodeError:
+        clients = {}
     
-    with open(USERS_DATA_FILE_PATH, "r") as data_file:
-        clients = json.load(data_file)
-    
-async def save_clients_list(data_file_path: str):
+def save_users(data_file_path: str):
     """Save the data of the clients dictionary to the json file"""
-    
-    with open(data_file_path, "w+") as data_file:
-        json.dump(clients, data_file, indent=4)
+    try:
+        with open(data_file_path, "w") as data_file:
+            json.dump(clients, data_file, indent=4)
+    except FileNotFoundError:
+        print(f"{data_file_path} doesn't exist")
     
 async def broadcast(message, username):
     """ Sends message to all clients except sender """
@@ -314,8 +320,8 @@ async def run_user_signup(reader, writer) -> tuple:
                 "password": hashed_password.decode()
                 }
             
-        await save_clients_list(USERS_DATA_FILE_PATH)
-        await load_clients_list(USERS_DATA_FILE_PATH)
+        save_users(USERS_DATA_FILE_PATH)
+        load_users(USERS_DATA_FILE_PATH)
         return (True, username)
     
     return (False, "Unknown")
@@ -422,7 +428,7 @@ async def handle_client(reader, writer):
         
 async def run_server():
     """ Runs a server on the Host using the port """
-    await load_clients_list(USERS_DATA_FILE_PATH)
+    load_users(USERS_DATA_FILE_PATH)
     
     server = await asyncio.start_server(
         handle_client,
@@ -435,4 +441,4 @@ async def run_server():
     async with server:
         await server.serve_forever()
     
-    await save_clients_list(USERS_DATA_FILE_PATH)
+    save_users(USERS_DATA_FILE_PATH)
