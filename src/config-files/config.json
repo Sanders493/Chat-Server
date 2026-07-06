@@ -1,5 +1,6 @@
 {
     "host": "192.168.1.168",
     "port": 8000,
-    "server_password": "SuperSanders123"
+    "server_password": "SuperSanders123",
+    "users_data_file_path": "data-files/users.json"
 }

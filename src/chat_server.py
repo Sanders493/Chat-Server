@@ -4,25 +4,32 @@ from client import Client
 import json
 import bcrypt # type: ignore
 
-with open("config-files/config.json") as f:
+with open("config-files/config.json", "r") as f:
     config = json.load(f)
 
-HOST = config.host
-PORT = config.port
-SERVER_PASSWORD = config.server_password
+HOST = config["host"]
+PORT = config["port"]
+SERVER_PASSWORD = config["server_password"]
+USERS_DATA_FILE_PATH = config["users_data_file_path"]
 
 clients: dict[dict] = {}
-
-with open("data-files/users.json", "r") as data_file:
-    clients = json.load(data_file)
-
-connected_clients = []
-
-# TODO finish user data logic
-
+connected_clients: list[Client] = []
 
 lock = asyncio.Lock()
 
+async def load_clients_list(data_file_path: str):
+    """Load the clients dictionary with data from the json file"""
+    global clients
+    
+    with open(USERS_DATA_FILE_PATH, "r") as data_file:
+        clients = json.load(data_file)
+    
+async def save_clients_list(data_file_path: str):
+    """Save the data of the clients dictionary to the json file"""
+    
+    with open(data_file_path, "w+") as data_file:
+        json.dump(clients, data_file, indent=4)
+    
 async def broadcast(message, username):
     """ Sends message to all clients except sender """
     
@@ -61,7 +68,7 @@ async def get_username(reader, writer, is_signup: bool=False) -> str:
                 await send_message_to_user(writer, "Username must be 2-20 letters or digits.")
                 continue
             
-            if any(client.username == username for client in connected_clients):
+            if any(client == username for client in clients):
                 await send_message_to_user(writer, "Username already taken.")
                 continue
 
@@ -137,7 +144,6 @@ async def hash_password(password: str) -> bytes:
             password.encode(),
             bcrypt.gensalt())
     
-    print(password_hashed)
     return password_hashed
         
 async def greet_user(writer, username):
@@ -303,8 +309,13 @@ async def run_user_signup(reader, writer) -> tuple:
         
         hashed_password = await hash_password(password)
         async with lock:
-            connected_clients.append(Client(reader, writer, username, hashed_password))
+            connected_clients.append(Client(reader, writer, username))
+            clients[username] = {
+                "password": hashed_password.decode()
+                }
             
+        await save_clients_list(USERS_DATA_FILE_PATH)
+        await load_clients_list(USERS_DATA_FILE_PATH)
         return (True, username)
     
     return (False, "Unknown")
@@ -315,21 +326,19 @@ async def run_user_login(reader, writer) -> tuple[bool, str]:
     access_granted = False
     username = await get_username(reader, writer)
     
-    client = next(
-        (client for client in connected_clients if username == client.username),
-        None)
+    client = clients.get(username, None)
     
     if not client:
-        send_message_to_user(writer, message="The user was not found")
+        await send_message_to_user(writer, message="The user was not found")
         return (access_granted, "Unknown")
     
     entered_password = await get_password(reader, writer)
     
-    access_granted = await check_password_correct(reader, writer,entered_password, client)
+    access_granted = await check_password_correct(reader, writer, entered_password, client)
     
     return (access_granted, username)
     
-async def check_password_correct(reader, writer,entered_password: str, user: Client) -> bool:
+async def check_password_correct(reader, writer,entered_password: str, user: dict) -> bool:
     """Check if the password entered is the correct password for the current user"""
     
     MAX_ATTEMPTS = 5
@@ -343,10 +352,11 @@ async def check_password_correct(reader, writer,entered_password: str, user: Cli
             raise ConnectionError("Client disconnected")
 
         entered_password = data.decode().strip()
-
+        stored_hash = user["password"].encode()
         if bcrypt.checkpw(
         entered_password.encode(),
-        user.password):
+        stored_hash
+        ):
             return True
 
         await send_message_to_user(writer, f"Incorrect password ({attempt + 1}/{MAX_ATTEMPTS})")
@@ -418,6 +428,8 @@ async def handle_client(reader, writer):
         
 async def run_server():
     """ Runs a server on the Host using the port """
+    await load_clients_list(USERS_DATA_FILE_PATH)
+    
     server = await asyncio.start_server(
         handle_client,
         HOST,
@@ -428,3 +440,5 @@ async def run_server():
     
     async with server:
         await server.serve_forever()
+    
+    await save_clients_list(USERS_DATA_FILE_PATH)
