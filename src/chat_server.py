@@ -371,7 +371,26 @@ async def remove_user_from_client_ls(username):
     for client in connected_clients:
         if client.username == username:
             connected_clients.remove(client)
-  
+
+async def process_command(writer, message: str, username: str) -> int:
+    """Process the user message"""
+
+    if message.startswith("/msg"):
+        await run_msg_cmd(message, writer, username)
+    elif message.startswith("/list") or message.startswith("/users"):
+        await run_list_cmd(writer)
+    elif message.startswith("/whoami"):
+        await run_whoami_cmd(writer, username)
+    elif message.startswith("/help"):
+        await run_help_cmd(writer)
+    elif message.startswith("/quit"):
+        return 1 # code for user wants to quit
+    else:
+        formatted = f"{username}: {message}\n".encode()
+        await broadcast(formatted, username)
+    
+    return 0 # code for every other commands
+        
 async def handle_client(reader, writer):
     """ Handle a new client 
 
@@ -383,7 +402,8 @@ async def handle_client(reader, writer):
     try:
         addr = writer.get_extra_info("peername")   
         print(f"Connected: {addr}")
-        
+        print(type(reader))
+        print(type(writer))
         access_granted = False
         
         access_granted, username = await signup_or_login(reader, writer)
@@ -399,21 +419,12 @@ async def handle_client(reader, writer):
                 break
             
             message = data.decode().strip()
-            print(f"{username}: {message}")
             
-            if message.startswith("/msg"):
-                await run_msg_cmd(message, writer, username)
-            elif message.startswith("/list") or message.startswith("/users"):
-                await run_list_cmd(writer)
-            elif message.startswith("/whoami"):
-                await run_whoami_cmd(writer, username)
-            elif message.startswith("/help"):
-                await run_help_cmd(writer)
-            elif message.startswith("/quit"):
+            print(f"{username}: {message}")
+            command_result = await process_command(writer, message, username)
+            
+            if command_result == 1:
                 return
-            else:
-                formatted = f"{username}: {message}\n".encode()
-                await broadcast(formatted, username)
             
     except Exception as e:
         print(e)
