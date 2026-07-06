@@ -7,21 +7,28 @@ import bcrypt # type: ignore
 with open("config-files/config.json") as f:
     config = json.load(f)
 
-HOST = config["host"]
-PORT = config["port"]
-SERVER_PASSWORD = config["server_password"]
+HOST = config.host
+PORT = config.port
+SERVER_PASSWORD = config.server_password
 
-clients: list[Client] = []
+clients: dict[dict] = {}
+
+with open("data-files/users.json", "r") as data_file:
+    clients = json.load(data_file)
+
+connected_clients = []
+
+# TODO finish user data logic
+
 
 lock = asyncio.Lock()
-
 
 async def broadcast(message, username):
     """ Sends message to all clients except sender """
     
     dead_clients = []
     
-    for client in clients.copy():
+    for client in connected_clients.copy():
         if client.username != username:
             try:
                 client.writer.write(message)
@@ -31,14 +38,13 @@ async def broadcast(message, username):
     
     async with lock:
         for client in dead_clients:
-            clients.remove(client)
+            connected_clients.remove(client)
         
 async def get_username(reader, writer, is_signup: bool=False) -> str:
     """Get the username of a client"""
     
     while True:
-        writer.write(b"Enter a username: " if is_signup else b"Enter username: ")
-        await writer.drain()
+        await send_message_to_user(writer, "Enter a username: " if is_signup else "Enter username: ")
         
         data = await reader.readline()
         if not data:
@@ -48,18 +54,15 @@ async def get_username(reader, writer, is_signup: bool=False) -> str:
         
         if is_signup:
             if not username:
-                writer.write(b"Username cannot be empty.\n")
-                await writer.drain()
+                await send_message_to_user(writer, "Username cannot be empty")
                 continue
             
             if not re.fullmatch(r"^[a-zA-Z0-9]{2,20}$", username):
-                writer.write(b"Username must be 2-20 letters or digits.\n")
-                await writer.drain()
+                await send_message_to_user(writer, "Username must be 2-20 letters or digits.")
                 continue
             
-            if any(client.username == username for client in clients):
-                writer.write(b"Username already taken.\n")
-                await writer.drain()
+            if any(client.username == username for client in connected_clients):
+                await send_message_to_user(writer, "Username already taken.")
                 continue
 
         return username
@@ -68,8 +71,7 @@ async def get_password(reader, writer, is_signup: bool = False) -> str:
     """Get the password of a client"""
     
     while True:
-        writer.write(b"Enter a password: " if is_signup else b"Enter password: ")
-        await writer.drain()
+        await send_message_to_user(writer, "Enter a password: " if is_signup else "Enter password: ")
         
         data = await reader.readline()
         if not data:
@@ -78,27 +80,23 @@ async def get_password(reader, writer, is_signup: bool = False) -> str:
         password = data.decode().strip()
         
         if not password:
-            writer.write(b"You didn't enter anything.\n")
-            await writer.drain()
+            await send_message_to_user(writer, "You didn't enter anything")
             continue
         
         if is_signup:
             if not await validate_password(writer, password):
                 continue
             
-            writer.write(b"Confirm password: ")
-            await writer.drain()
+            await send_message_to_user(writer, "Confirm password: ")
             
             data = await reader.readline()
-            
             if not data:
                 raise ConnectionError("Client disconnected")
             
             password_input2 = data.decode().strip()
              
             if password != password_input2:
-                writer.write(b"Passwords do not match.\n")
-                await writer.drain()
+                await send_message_to_user(writer, "Passwords do not match.")
                 continue
             
         return password
@@ -107,39 +105,27 @@ async def validate_password(writer, password: str) -> bool:
     """Run validation checks on the given password"""
     
     if len(password) < 8:
-        writer.write(b"Password must contain at least 8 characters\n")
-        await writer.drain()
-        
+        await send_message_to_user(writer, "Password must contain at least 8 characters")
         return False
     
     if len(password) > 128:
-        writer.write(b"Password cannot exceed 128 characters.\n")
-        await writer.drain()
-        
+        await send_message_to_user(writer, "Password cannot exceed 128 characters.")
         return False
     
     if not re.search(r"[A-Z]", password):
-        writer.write(b"Password must contain at least one uppercase letter\n")
-        await writer.drain()
-        
+        await send_message_to_user(writer, "Password must contain at least one uppercase letter")
         return False
     
     if not re.search(r"[a-z]", password):
-        writer.write(b"Password must contain at least one lowercase letter\n")
-        await writer.drain()
-        
+        await send_message_to_user(writer, "Password must contain at least one lowercase letter")
         return False
     
     if not re.search(r"\d", password):
-        writer.write(b"Password must contain at least one digit\n")
-        await writer.drain()
-        
+        await send_message_to_user(writer, "Password must contain at least one digit")
         return False
     
     if not re.search(r"[!#$%*+]", password):
-        writer.write(b"Password must contain at least one of these special characters [!#$%*+]\n")
-        await writer.drain()
-        
+        await send_message_to_user(writer, "Password must contain at least one of these special characters [!#$%*+]")    
         return False
     
     return True
@@ -157,7 +143,7 @@ async def hash_password(password: str) -> bytes:
 async def greet_user(writer, username):
     """Greet the user with the appropriate message based on their username""" 
     
-    writer.write(f"Welcome to the chat {username}!\n".encode())
+    await send_message_to_user(writer, f"Welcome to the chat {username}!")
     await broadcast(f"{username} joined\n".encode(), username)
 
 async def user_farewell(writer, username, addr):
@@ -174,31 +160,26 @@ async def send_pm(message, writer, sender_name, receiver_name):
     """Send a private message to a specific user"""
     
     if sender_name == receiver_name:
-        writer.write(b"You can't send a private message to yourself.\n")
-        await writer.drain()
+        await send_message_to_user(writer, "You can't send a private message to yourself.")
         return
     
     receiver = next(
-        (client for client in clients if client.username == receiver_name),
+        (client for client in connected_clients if client.username == receiver_name),
         None)
     
     if not receiver:
-        writer.write(b"User not found\n")
-        await writer.drain()
+        await send_message_to_user(writer, "User not found")
         return
     
     formatted = f"[PM] {sender_name}: {message}\n".encode()
     
     try:
-        receiver.writer.write(formatted)
-        await receiver.writer.drain()
+        await send_message_to_user(receiver.writer, formatted)
         
-        writer.write(f"[PM to {receiver_name}] {message}\n".encode())
-        await writer.drain()
+        await send_message_to_user(writer, f"[PM to {receiver_name}] {message}")
         
     except OSError:
-        writer.write(b"Failed to send private message.\n")
-        await writer.drain()
+        await send_message_to_user(writer, "Failed to send private message.")
        
 async def run_msg_cmd(message, writer, sender):
     """Run the operations associated with the /msg command"""
@@ -206,8 +187,7 @@ async def run_msg_cmd(message, writer, sender):
     message_parts = message.split(maxsplit=2)
     
     if len(message_parts) != 3:
-        writer.write(b"Usage: /msg <username> <message>\n")
-        await writer.drain()
+        await send_message_to_user(writer, "Usage: /msg <username> <message>")
         return
     
     recipient = message_parts[1]
@@ -219,19 +199,17 @@ async def run_list_cmd(writer):
     
     message = "Online users:\n"
     
-    for client in clients:
+    for client in connected_clients:
         message += client.username + "\n"
-        
-    writer.write(message.encode())
-    await writer.drain()
+
+    await send_message_to_user(writer, message)
  
 async def run_whoami_cmd(writer, username):
     """Run the operations associated with the /whoami command"""
     
     message = f"You are {username}\n"
 
-    writer.write(message.encode())
-    await writer.drain()
+    await send_message_to_user(writer, message)
 
 async def run_help_cmd(writer):
     """Run the operations associated with the help command"""
@@ -256,11 +234,11 @@ async def run_help_cmd(writer):
     )
 
     writer.write(help_text.encode())
-    await writer.drain()  
+    await writer.drain()
 
-async def send_error(writer, error_message: str):
-    """Send an error message to the user"""
-    writer.write(f"{error_message}\n".encode())
+async def send_message_to_user(writer, message: str):
+    """Send an message to the user"""
+    writer.write(f"{message}\n".encode())
     await writer.drain()
     
 async def ask_for_server_password(reader, writer) -> bool:
@@ -270,12 +248,9 @@ async def ask_for_server_password(reader, writer) -> bool:
     attempt = 0
     
     for _ in range(MAX_ATTEMPTS):
-        attempt += 1
-        writer.write(b"Server password: ")
-        await writer.drain()
+        await send_message_to_user(writer, "Server password: ")
 
         data = await reader.readline()
-
         if not data:
             raise ConnectionError("Client disconnected")
 
@@ -284,11 +259,10 @@ async def ask_for_server_password(reader, writer) -> bool:
         if password == SERVER_PASSWORD:
             return True
 
-        writer.write(f"ACCESS DENIED: Incorrect password ({attempt}/{MAX_ATTEMPTS})\n".encode())
-        await writer.drain()
+        await send_message_to_user(writer, f"ACCESS DENIED: Incorrect password ({attempt + 1}/{MAX_ATTEMPTS})")
+        attempt += 1
 
-    writer.write(b"Too many failed attempts.\n")
-    await writer.drain()
+    await send_message_to_user(writer, "Too many failed attempts.")
 
     return False
     
@@ -329,7 +303,7 @@ async def run_user_signup(reader, writer) -> tuple:
         
         hashed_password = await hash_password(password)
         async with lock:
-            clients.append(Client(reader, writer, username, hashed_password))
+            connected_clients.append(Client(reader, writer, username, hashed_password))
             
         return (True, username)
     
@@ -342,11 +316,11 @@ async def run_user_login(reader, writer) -> tuple[bool, str]:
     username = await get_username(reader, writer)
     
     client = next(
-        (client for client in clients if username == client.username),
+        (client for client in connected_clients if username == client.username),
         None)
     
     if not client:
-        send_error(writer, error_message="The user was not found")
+        send_message_to_user(writer, message="The user was not found")
         return (access_granted, "Unknown")
     
     entered_password = await get_password(reader, writer)
@@ -362,33 +336,31 @@ async def check_password_correct(reader, writer,entered_password: str, user: Cli
     attempt = 0
     
     for _ in range(MAX_ATTEMPTS): 
-        writer.write(b"Enter password: ")
-        await writer.drain()
+        await send_message_to_user(writer, "Enter password: ")
 
         data = await reader.readline()
-
         if not data:
             raise ConnectionError("Client disconnected")
 
-        password = data.decode().strip()
+        entered_password = data.decode().strip()
 
         if bcrypt.checkpw(
         entered_password.encode(),
         user.password):
             return True
 
-        await send_error(f"Incorrect password ({attempt + 1}/{MAX_ATTEMPTS})")
+        await send_message_to_user(writer, f"Incorrect password ({attempt + 1}/{MAX_ATTEMPTS})")
         attempt += 1
         
-    send_error("Too many failed attempts")
+    await send_message_to_user(writer, "Too many failed attempts")
 
     return False
     
 async def remove_user_from_client_ls(username):
     """ Remove a user from the client list"""  
-    for client in clients:
+    for client in connected_clients:
         if client.username == username:
-            clients.remove(client)
+            connected_clients.remove(client)
   
 async def handle_client(reader, writer):
     """ Handle a new client 
