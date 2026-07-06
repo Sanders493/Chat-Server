@@ -177,7 +177,7 @@ async def send_pm(message, writer, sender_name, receiver_name):
         await send_message_to_user(writer, "User not found")
         return
     
-    formatted = f"[PM] {sender_name}: {message}\n".encode()
+    formatted = f"[PM] {sender_name}: {message}\n"
     
     try:
         await send_message_to_user(receiver.writer, formatted)
@@ -331,27 +331,21 @@ async def run_user_login(reader, writer) -> tuple[bool, str]:
     if not client:
         await send_message_to_user(writer, message="The user was not found")
         return (access_granted, "Unknown")
+     
+    access_granted = await check_password_correct(reader, writer, client)
     
-    entered_password = await get_password(reader, writer)
-    
-    access_granted = await check_password_correct(reader, writer, entered_password, client)
-    
+    if access_granted:
+        connected_clients.append(Client(reader, writer, username))
     return (access_granted, username)
     
-async def check_password_correct(reader, writer,entered_password: str, user: dict) -> bool:
+async def check_password_correct(reader, writer, user: dict) -> bool:
     """Check if the password entered is the correct password for the current user"""
     
     MAX_ATTEMPTS = 5
     attempt = 0
     
     for _ in range(MAX_ATTEMPTS): 
-        await send_message_to_user(writer, "Enter password: ")
-
-        data = await reader.readline()
-        if not data:
-            raise ConnectionError("Client disconnected")
-
-        entered_password = data.decode().strip()
+        entered_password = await get_password(reader, writer)
         stored_hash = user["password"].encode()
         if bcrypt.checkpw(
         entered_password.encode(),
