@@ -1,8 +1,10 @@
 import asyncio
 import re
 from client import Client
+from chat_room import ChatRoom
+from asyncio import StreamReader, StreamWriter
 import json
-import bcrypt # type: ignore
+import bcrypt # type:ignore
 
 with open("config-files/config.json", "r") as f:
     config = json.load(f)
@@ -14,11 +16,21 @@ USERS_DATA_FILE_PATH = config["users_data_file_path"]
 
 clients: dict[dict] = {}
 connected_clients: list[Client] = []
+rooms: dict[str, ChatRoom] = {
+    "General": ChatRoom("general"),
+    "Programming": ChatRoom("programming"),
+    "Sports": ChatRoom("sports"),
+    "Music": ChatRoom("music")
+}
 
 lock = asyncio.Lock()
 
 def load_users(data_file_path: str):
-    """Load the clients dictionary with data from the json file"""
+    """Load the clients dictionary with data from the json file
+
+    Args:
+        data_file_path (str): the path of the file that contains the users' data
+    """
     global clients
     try:
         with open(data_file_path, "r") as data_file:
@@ -29,15 +41,24 @@ def load_users(data_file_path: str):
         clients = {}
     
 def save_users(data_file_path: str):
-    """Save the data of the clients dictionary to the json file"""
+    """Save the data of the clients dictionary to the json file
+
+    Args:
+        data_file_path (str): the path of the file that contains the users' data
+    """
     try:
         with open(data_file_path, "w") as data_file:
             json.dump(clients, data_file, indent=4)
     except FileNotFoundError:
         print(f"{data_file_path} doesn't exist")
     
-async def broadcast(message, username):
-    """ Sends message to all clients except sender """
+async def broadcast(message: str, username: str):
+    """Sends message to all clients except sender
+
+    Args:
+        message (str): the message to be sent to all users
+        username (str): the username of the message sender
+    """
     
     dead_clients = []
     
@@ -53,8 +74,20 @@ async def broadcast(message, username):
         for client in dead_clients:
             connected_clients.remove(client)
         
-async def get_username(reader, writer, is_signup: bool=False) -> str:
-    """Get the username of a client"""
+async def get_username(reader: StreamReader, writer: StreamWriter, is_signup: bool=False) -> str:
+    """Get the username of a client
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+        is_signup (bool, optional): whether or not the method is used for user's sign up. Defaults to False.
+
+    Raises:
+        ConnectionError: is raised whenever the user disconnects
+
+    Returns:
+        str: the username entered by the client
+    """
     
     while True:
         await send_message_to_user(writer, "Enter a username: " if is_signup else "Enter username: ")
@@ -80,8 +113,21 @@ async def get_username(reader, writer, is_signup: bool=False) -> str:
 
         return username
 
-async def get_password(reader, writer, is_signup: bool = False) -> str:
-    """Get the password of a client"""
+async def get_password(reader: StreamReader, writer: StreamWriter, is_signup: bool = False) -> str:
+    """Get the password of a client
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+        is_signup (bool, optional): whether or not the method is used for user's sign up. Defaults to False.
+
+    Raises:
+        ConnectionError: is raised whenever the user disconnects
+        ConnectionError: is raised whenever the user disconnects
+
+    Returns:
+        str: the password entered by the client
+    """
     
     while True:
         await send_message_to_user(writer, "Enter a password: " if is_signup else "Enter password: ")
@@ -114,8 +160,16 @@ async def get_password(reader, writer, is_signup: bool = False) -> str:
             
         return password
 
-async def validate_password(writer, password: str) -> bool:
-    """Run validation checks on the given password"""
+async def validate_password(writer: StreamWriter, password: str) -> bool:
+    """Run validation checks on the given password
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+        password (str): the password being validated
+
+    Returns:
+        bool: whether or not the password was validated
+    """
     
     if len(password) < 8:
         await send_message_to_user(writer, "Password must contain at least 8 characters")
@@ -144,7 +198,14 @@ async def validate_password(writer, password: str) -> bool:
     return True
     
 async def hash_password(password: str) -> bytes:
-    """ Hash the password """
+    """Hash the password
+
+    Args:
+        password (str): the password to hash
+
+    Returns:
+        bytes: the hashed password
+    """
     
     password_hashed = bcrypt.hashpw(
             password.encode(),
@@ -152,14 +213,25 @@ async def hash_password(password: str) -> bytes:
     
     return password_hashed
         
-async def greet_user(writer, username):
-    """Greet the user with the appropriate message based on their username""" 
+async def greet_user(writer: StreamWriter, username: str):
+    """Greet the user with the appropriate message based on their username
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+        username (str): the client's username
+    """
     
     await send_message_to_user(writer, f"Welcome to the chat {username}!")
     await broadcast(f"{username} joined\n".encode(), username)
 
-async def user_farewell(writer, username, addr):
-    """Execute the user farewell operations"""
+async def user_farewell(writer: StreamWriter, username: str, addr: str):
+    """Execute the user farewell operations
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+        username (str): the client's username
+        addr (str): the client's ip address
+    """
     
     print(f"Disconnected: {username} @ {addr}")
     await broadcast(f"{username} left\n".encode(), username)
@@ -168,8 +240,15 @@ async def user_farewell(writer, username, addr):
     writer.close()
     await writer.wait_closed()
 
-async def send_pm(message, writer, sender_name, receiver_name):
-    """Send a private message to a specific user"""
+async def send_pm(message: str, writer: StreamWriter, sender_name: str, receiver_name: str):
+    """Send a private message to a specific user
+
+    Args:
+        message (str): the message being sent
+        writer (StreamWriter): Send a private message to a specific user
+        sender_name (str): the sender's username
+        receiver_name (str): the receiver's username
+    """
     
     if sender_name == receiver_name:
         await send_message_to_user(writer, "You can't send a private message to yourself.")
@@ -193,8 +272,14 @@ async def send_pm(message, writer, sender_name, receiver_name):
     except OSError:
         await send_message_to_user(writer, "Failed to send private message.")
        
-async def run_msg_cmd(message, writer, sender):
-    """Run the operations associated with the /msg command"""
+async def run_msg_cmd(message: str, writer: StreamWriter, sender: str):
+    """Run the operations associated with the /msg command
+
+    Args:
+        message (str): the message being sent
+        writer (StreamWriter): the stream writer of the client
+        sender (str): the sender's username
+    """
     
     message_parts = message.split(maxsplit=2)
     
@@ -206,8 +291,12 @@ async def run_msg_cmd(message, writer, sender):
     private_message = message_parts[2]
     await send_pm(private_message, writer, sender, recipient)
 
-async def run_list_cmd(writer):
-    """Run the operations associated with the /list command"""
+async def run_list_cmd(writer: StreamWriter):
+    """Run the operations associated with the /list command
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+    """
     
     message = "Online users:\n"
     
@@ -216,15 +305,24 @@ async def run_list_cmd(writer):
 
     await send_message_to_user(writer, message)
  
-async def run_whoami_cmd(writer, username):
-    """Run the operations associated with the /whoami command"""
+async def run_whoami_cmd(writer: StreamWriter, username: str):
+    """Run the operations associated with the /whoami command
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+        username (str): the client's username
+    """
     
     message = f"You are {username}\n"
 
     await send_message_to_user(writer, message)
 
-async def run_help_cmd(writer):
-    """Run the operations associated with the help command"""
+async def run_help_cmd(writer: StreamWriter):
+    """Run the operations associated with the help command
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+    """
     help_text = (
         "\n"
         "================ Chat Commands ================\n\n"
@@ -248,13 +346,29 @@ async def run_help_cmd(writer):
     writer.write(help_text.encode())
     await writer.drain()
 
-async def send_message_to_user(writer, message: str):
-    """Send an message to the user"""
+async def send_message_to_user(writer: StreamWriter, message: str):
+    """Send an message to the user
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+        message (str): the message being sent
+    """
     writer.write(f"{message}\n".encode())
     await writer.drain()
     
-async def ask_for_server_password(reader, writer) -> bool:
-    """Ask the user for the server password before they can join."""
+async def ask_for_server_password(reader: StreamReader, writer: StreamWriter) -> bool:
+    """Ask the user for the server password before they can join.
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+
+    Raises:
+        ConnectionError: is raised whenever the user disconnects
+
+    Returns:
+        bool: whether or not the client is allowed to access the server
+    """
 
     MAX_ATTEMPTS = 5
     attempt = 0
@@ -278,8 +392,19 @@ async def ask_for_server_password(reader, writer) -> bool:
 
     return False
     
-async def signup_or_login(reader, writer) -> tuple[bool, str]:
-    """Run the operations associated with asking the user if he/she's signing up or login in"""
+async def signup_or_login(reader: StreamReader, writer: StreamWriter) -> tuple[bool, str]:
+    """Run the operations associated with asking the user if he/she's signing up or login in
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+
+    Raises:
+        ConnectionError: is raised whenever the user disconnects
+
+    Returns:
+        tuple[bool, str]: a tuple contain the whether or not the user can access the server and the user's username
+    """
     
     while True:
         message = (
@@ -304,8 +429,16 @@ async def signup_or_login(reader, writer) -> tuple[bool, str]:
         
         return response # (access_granted = false, placeholder because user couldn't signup)
         
-async def run_user_signup(reader, writer) -> tuple:
-    """Run the operations associated with the user sign up process"""     
+async def run_user_signup(reader: StreamReader, writer: StreamWriter) -> tuple:
+    """Run the operations associated with the user sign up process
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+
+    Returns:
+        tuple: a tuple contain the whether or not the user can access the server and the user's username
+    """
     
     access_granted = await ask_for_server_password(reader, writer)
     
@@ -326,8 +459,16 @@ async def run_user_signup(reader, writer) -> tuple:
     
     return (False, "Unknown")
 
-async def run_user_login(reader, writer) -> tuple[bool, str]:
-    """ Run the operations associated with the user logging in process"""
+async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bool, str]:
+    """Run the operations associated with the user logging in process
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+
+    Returns:
+        tuple[bool, str]: a tuple contain the whether or not the user can access the server and the user's username
+    """
     
     access_granted = False
     username = await get_username(reader, writer)
@@ -344,8 +485,17 @@ async def run_user_login(reader, writer) -> tuple[bool, str]:
         connected_clients.append(Client(reader, writer, username))
     return (access_granted, username)
     
-async def check_password_correct(reader, writer, user: dict) -> bool:
-    """Check if the password entered is the correct password for the current user"""
+async def check_password_correct(reader: StreamReader, writer: StreamWriter, user: dict) -> bool:
+    """Check if the password entered is the correct password for the current user
+
+    Args:
+        reader (StreamReader): the stream reader of the client
+        writer (StreamWriter): the stream writer of the client
+        user (dict): the client's dictionary  
+
+    Returns:
+        bool: whether or not the password entered by the user is correct
+    """
     
     MAX_ATTEMPTS = 5
     attempt = 0
@@ -366,14 +516,27 @@ async def check_password_correct(reader, writer, user: dict) -> bool:
 
     return False
     
-async def remove_user_from_client_ls(username):
-    """ Remove a user from the client list"""  
+async def remove_user_from_client_ls(username: str):
+    """Remove a user from the client list
+
+    Args:
+        username (str): the client's username
+    """
     for client in connected_clients:
         if client.username == username:
             connected_clients.remove(client)
 
-async def process_command(writer, message: str, username: str) -> int:
-    """Process the user message"""
+async def process_command(writer: StreamWriter, message: str, username: str) -> int:
+    """Process the user message
+
+    Args:
+        writer (StreamWriter): the stream writer of the client
+        message (str): the message being sent
+        username (str): the client's username
+
+    Returns:
+        int: code describing the result of the command
+    """
 
     if message.startswith("/msg"):
         await run_msg_cmd(message, writer, username)
@@ -381,6 +544,10 @@ async def process_command(writer, message: str, username: str) -> int:
         await run_list_cmd(writer)
     elif message.startswith("/whoami"):
         await run_whoami_cmd(writer, username)
+    elif message.startswith("/join"):
+        pass
+    elif message.startswith("/leave"):
+        pass
     elif message.startswith("/help"):
         await run_help_cmd(writer)
     elif message.startswith("/quit"):
@@ -391,12 +558,12 @@ async def process_command(writer, message: str, username: str) -> int:
     
     return 0 # code for every other commands
         
-async def handle_client(reader, writer):
+async def handle_client(reader: StreamReader, writer: StreamWriter):
     """ Handle a new client 
 
     Args:
-        reader: the reader of the new client
-        writer: the writer of the new client
+        reader (StreamReader): the reader of the new client
+        writer (StreamWriter): the writer of the new client
     """
        
     try:
