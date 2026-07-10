@@ -1,5 +1,9 @@
-from chat_room import ChatRoom
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from asyncio import StreamReader, StreamWriter
+
+if TYPE_CHECKING:
+    from chat_room import ChatRoom
 class Client:
     """ Represents the attributes and behavior of a server client"""
     
@@ -12,7 +16,7 @@ class Client:
             username (str): the client's username
             room (ChatRoom, optional): the chatroom that the client is currently in. Defaults to None.
         """
-        self.reader = reader
-        self.writer = writer
+        self.reader: StreamReader = reader
+        self.writer: StreamWriter = writer
         self.username: str = username
-        self.room = room
+        self.room: ChatRoom = room

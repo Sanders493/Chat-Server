@@ -52,17 +52,18 @@ def save_users(data_file_path: str):
     except FileNotFoundError:
         print(f"{data_file_path} doesn't exist")
     
-async def broadcast(message: str, username: str):
+async def broadcast(room: ChatRoom, message: str, username: str):
     """Sends message to all clients except sender
 
     Args:
+        room (ChatRoom): the chatroom that the user is currently in
         message (str): the message to be sent to all users
         username (str): the username of the message sender
     """
     
     dead_clients = []
     
-    for client in connected_clients.copy():
+    for client in room.members.copy():
         if client.username != username:
             try:
                 client.writer.write(message)
@@ -222,7 +223,7 @@ async def greet_user(writer: StreamWriter, username: str):
     """
     
     await send_message_to_user(writer, f"Welcome to the chat {username}!")
-    await broadcast(f"{username} joined\n".encode(), username)
+    await broadcast(rooms["General"], f"{username} joined\n".encode(), username)
 
 async def user_farewell(writer: StreamWriter, username: str, addr: str):
     """Execute the user farewell operations
@@ -234,7 +235,7 @@ async def user_farewell(writer: StreamWriter, username: str, addr: str):
     """
     
     print(f"Disconnected: {username} @ {addr}")
-    await broadcast(f"{username} left\n".encode(), username)
+    await broadcast(rooms["General"], f"{username} left\n".encode(), username)
         
     await remove_user_from_client_ls(username)
     writer.close()
@@ -429,7 +430,7 @@ async def signup_or_login(reader: StreamReader, writer: StreamWriter) -> tuple[b
         
         return response # (access_granted = false, placeholder because user couldn't signup)
         
-async def run_user_signup(reader: StreamReader, writer: StreamWriter) -> tuple:
+async def run_user_signup(reader: StreamReader, writer: StreamWriter) -> tuple[bool, Client]:
     """Run the operations associated with the user sign up process
 
     Args:
@@ -437,7 +438,7 @@ async def run_user_signup(reader: StreamReader, writer: StreamWriter) -> tuple:
         writer (StreamWriter): the stream writer of the client
 
     Returns:
-        tuple: a tuple contain the whether or not the user can access the server and the user's username
+        tuple[bool, Client]: a tuple contain the whether or not the user can access the server and the user's client object
     """
     
     access_granted = await ask_for_server_password(reader, writer)
@@ -447,19 +448,21 @@ async def run_user_signup(reader: StreamReader, writer: StreamWriter) -> tuple:
         password = await get_password(reader, writer, is_signup=True)
         
         hashed_password = await hash_password(password)
+        client = Client(reader, writer, username, rooms["General"])
         async with lock:
-            connected_clients.append(Client(reader, writer, username))
+            connected_clients.append(client)
+            rooms["General"].add_member(client)
             clients[username] = {
                 "password": hashed_password.decode()
                 }
             
         save_users(USERS_DATA_FILE_PATH)
         load_users(USERS_DATA_FILE_PATH)
-        return (True, username)
+        return (True, client)
     
     return (False, "Unknown")
 
-async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bool, str]:
+async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bool, Client]:
     """Run the operations associated with the user logging in process
 
     Args:
@@ -467,7 +470,7 @@ async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bo
         writer (StreamWriter): the stream writer of the client
 
     Returns:
-        tuple[bool, str]: a tuple contain the whether or not the user can access the server and the user's username
+        tuple[bool, Client]: a tuple contain the whether or not the user can access the server and the user's client object
     """
     
     access_granted = False
@@ -482,8 +485,10 @@ async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bo
     access_granted = await check_password_correct(reader, writer, client)
     
     if access_granted:
-        connected_clients.append(Client(reader, writer, username))
-    return (access_granted, username)
+        client = Client(reader, writer, username, rooms["General"])
+        connected_clients.append(client)
+        rooms["General"].add_member(client)
+    return (access_granted, client)
     
 async def check_password_correct(reader: StreamReader, writer: StreamWriter, user: dict) -> bool:
     """Check if the password entered is the correct password for the current user
@@ -526,7 +531,7 @@ async def remove_user_from_client_ls(username: str):
         if client.username == username:
             connected_clients.remove(client)
 
-async def process_command(writer: StreamWriter, message: str, username: str) -> int:
+async def process_command(writer: StreamWriter, message: str, client: Client) -> int:
     """Process the user message
 
     Args:
@@ -539,22 +544,28 @@ async def process_command(writer: StreamWriter, message: str, username: str) -> 
     """
 
     if message.startswith("/msg"):
-        await run_msg_cmd(message, writer, username)
+        await run_msg_cmd(message, writer, client.username)
     elif message.startswith("/list") or message.startswith("/users"):
         await run_list_cmd(writer)
     elif message.startswith("/whoami"):
-        await run_whoami_cmd(writer, username)
+        await run_whoami_cmd(writer, client.username)
     elif message.startswith("/join"):
         pass
     elif message.startswith("/leave"):
+        pass
+    elif message.startswith("/whereami"):
+        pass
+    elif message.startswith("/rooms"):
+        pass
+    elif message.startswith("/create"):
         pass
     elif message.startswith("/help"):
         await run_help_cmd(writer)
     elif message.startswith("/quit"):
         return 1 # code for user wants to quit
     else:
-        formatted = f"{username}: {message}\n".encode()
-        await broadcast(formatted, username)
+        formatted = f"[{client.room.name}] {client.username}: {message}\n".encode()
+        await broadcast(client.room, formatted, client.username)
     
     return 0 # code for every other commands
         
@@ -569,16 +580,15 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
     try:
         addr = writer.get_extra_info("peername")   
         print(f"Connected: {addr}")
-        print(type(reader))
-        print(type(writer))
+        
         access_granted = False
         
-        access_granted, username = await signup_or_login(reader, writer)
+        access_granted, client = await signup_or_login(reader, writer)
         
         if not access_granted:
             return
         
-        await greet_user(writer, username)
+        await greet_user(writer, client.username)
         
         while True:
             data = await reader.readline()
@@ -587,8 +597,8 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
             
             message = data.decode().strip()
             
-            print(f"{username}: {message}")
-            command_result = await process_command(writer, message, username)
+            print(f"{client.username}: {message}")
+            command_result = await process_command(writer, message, client)
             
             if command_result == 1:
                 return
@@ -598,7 +608,7 @@ async def handle_client(reader: StreamReader, writer: StreamWriter):
         
     finally:
         if access_granted:
-            await user_farewell(writer, username, addr)
+            await user_farewell(writer, client.username, addr)
         else:
             print(f"Disconnected: {addr}")
             writer.close()
