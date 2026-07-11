@@ -6,6 +6,8 @@ from asyncio import StreamReader, StreamWriter
 import json
 import bcrypt # type:ignore
 
+# TODO fix the login issue where a user can be logged in from with multiple device at the same time
+
 with open("config-files/config.json", "r") as f:
     config = json.load(f)
 
@@ -17,10 +19,10 @@ USERS_DATA_FILE_PATH = config["users_data_file_path"]
 clients: dict[dict] = {}
 connected_clients: list[Client] = []
 rooms: dict[str, ChatRoom] = {
-    "General": ChatRoom("general"),
-    "Programming": ChatRoom("programming"),
-    "Sports": ChatRoom("sports"),
-    "Music": ChatRoom("music")
+    "general": ChatRoom("general"),
+    "programming": ChatRoom("programming"),
+    "sports": ChatRoom("sports"),
+    "music": ChatRoom("music")
 }
 
 lock = asyncio.Lock()
@@ -60,13 +62,12 @@ async def broadcast(room: ChatRoom, message: str, username: str):
         message (str): the message to be sent to all users
         username (str): the username of the message sender
     """
-    
     dead_clients = []
     
     for client in room.members.copy():
         if client.username != username:
             try:
-                client.writer.write(message)
+                client.writer.write(message.encode())
                 await client.writer.drain()
             except ConnectionError:
                 dead_clients.append(client)
@@ -223,7 +224,7 @@ async def greet_user(writer: StreamWriter, username: str):
     """
     
     await send_message_to_user(writer, f"Welcome to the chat {username}!")
-    await broadcast(rooms["General"], f"{username} joined\n".encode(), username)
+    await broadcast(rooms["general"], f"{username} joined\n", username)
 
 async def user_farewell(writer: StreamWriter, username: str, addr: str):
     """Execute the user farewell operations
@@ -235,7 +236,7 @@ async def user_farewell(writer: StreamWriter, username: str, addr: str):
     """
     
     print(f"Disconnected: {username} @ {addr}")
-    await broadcast(rooms["General"], f"{username} left\n".encode(), username)
+    await broadcast(rooms["general"], f"{username} left\n", username)
         
     await remove_user_from_client_ls(username)
     writer.close()
@@ -339,6 +340,14 @@ async def run_help_cmd(writer: StreamWriter):
         "    Send a private message to another user.\n\n"
         "    Example:\n"
         "        /msg Alice Hello!\n\n"
+        "/rooms\n"
+        "   List all rooms\n\n"
+        "/join <room>\n"
+        "   Join a room\n\n"
+        "/leave\n"
+        "   Leave current room, and back to general room (default room)\n\n"
+        "/whereami\n"
+        "   Show current room\n\n"
         "/quit\n"
         "    Disconnect from the chat server.\n\n"
         "===============================================\n"
@@ -448,10 +457,10 @@ async def run_user_signup(reader: StreamReader, writer: StreamWriter) -> tuple[b
         password = await get_password(reader, writer, is_signup=True)
         
         hashed_password = await hash_password(password)
-        client = Client(reader, writer, username, rooms["General"])
+        client = Client(reader, writer, username, rooms["general"])
         async with lock:
             connected_clients.append(client)
-            rooms["General"].add_member(client)
+            rooms["general"].add_member(client)
             clients[username] = {
                 "password": hashed_password.decode()
                 }
@@ -472,7 +481,7 @@ async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bo
     Returns:
         tuple[bool, Client]: a tuple contain the whether or not the user can access the server and the user's client object
     """
-    
+
     access_granted = False
     username = await get_username(reader, writer)
     
@@ -485,11 +494,89 @@ async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bo
     access_granted = await check_password_correct(reader, writer, client)
     
     if access_granted:
-        client = Client(reader, writer, username, rooms["General"])
+        client = Client(reader, writer, username, rooms["general"])
         connected_clients.append(client)
-        rooms["General"].add_member(client)
+        rooms["general"].add_member(client)
     return (access_granted, client)
+  
+async def run_rooms_cmd(writer: StreamWriter):
+    """Run the operations associated with the /rooms command
+
+    Args:
+        writer (StreamWriter): the client's stream writer
+    """
     
+    message = "Rooms:\n"
+    
+    for room in rooms.keys():
+        message += room.capitalize() + "\n"
+        
+    await send_message_to_user(writer, message)
+   
+async def run_join_cmd(writer: StreamWriter, client: Client, message: str):
+    """Run the operations associated with the /join command
+
+    Args:
+        writer (StreamWriter): the client's stream writer
+        client (Client): the client's object
+        message (str): the message from the client
+    """
+    
+    message_info = message.split(" ", maxsplit=2)
+    
+    if len(message_info) != 2:
+        await send_message_to_user(writer, "Usage: /join <room>")
+        return
+    
+    room_name = message_info[1]
+    
+    if room_name not in rooms:
+        await send_message_to_user(writer, f"{room_name} doesn't exist")
+        return
+    
+    current_room_name = client.room.name
+    async with lock:
+        rooms[current_room_name].remove_member(client)
+        rooms[room_name].add_member(client)
+        client.room = rooms[room_name]
+    
+    await broadcast(rooms[room_name], f"{client.username} joined the room\n", client.username)
+    
+    welcome_message = (
+        f"{room_name.capitalize()} Room\n"
+        "--------------------"
+    )
+    await send_message_to_user(writer, welcome_message)
+
+async def run_leave_cmd(writer: StreamWriter, client: Client):
+    """Run the operations associated with the /leave command
+
+    Args:
+        writer (StreamWriter): the client's stream writer
+        client (Client): the client's object
+    """
+    
+    if client.room.name == "general":
+        await send_message_to_user(writer, "You are already in the general room")
+        return
+    
+    await broadcast(client.room, f"{client.username} left the room\n", client.username)
+    
+    async with lock:
+        rooms[client.room.name].remove_member(client)
+        rooms["general"].add_member(client)
+        client.room = rooms["general"]
+
+async def run_whereami_cmd(writer: StreamWriter, client: Client):
+    """Run the operations associated with the /whereami command
+
+    Args:
+        writer (StreamWriter): the client's stream writer
+        client (Client): the client's object
+    """
+    
+    await send_message_to_user(writer, f"You are in the {client.room.name} room")
+             
 async def check_password_correct(reader: StreamReader, writer: StreamWriter, user: dict) -> bool:
     """Check if the password entered is the correct password for the current user
 
@@ -550,21 +637,22 @@ async def process_command(writer: StreamWriter, message: str, client: Client) ->
     elif message.startswith("/whoami"):
         await run_whoami_cmd(writer, client.username)
     elif message.startswith("/join"):
-        pass
+        await run_join_cmd(writer, client, message)
     elif message.startswith("/leave"):
-        pass
+        await run_leave_cmd(writer, client)
     elif message.startswith("/whereami"):
-        pass
+        await run_whereami_cmd(writer, client)
     elif message.startswith("/rooms"):
-        pass
+        await run_rooms_cmd(writer)
     elif message.startswith("/create"):
         pass
     elif message.startswith("/help"):
         await run_help_cmd(writer)
     elif message.startswith("/quit"):
+        client.room.remove_member(client)
         return 1 # code for user wants to quit
     else:
-        formatted = f"[{client.room.name}] {client.username}: {message}\n".encode()
+        formatted = f"[{client.room.name}] {client.username}: {message}\n"
         await broadcast(client.room, formatted, client.username)
     
     return 0 # code for every other commands
