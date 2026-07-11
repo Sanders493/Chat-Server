@@ -490,7 +490,12 @@ async def run_user_login(reader: StreamReader, writer: StreamWriter) -> tuple[bo
     if not client:
         await send_message_to_user(writer, message="The user was not found")
         return (access_granted, "Unknown")
-     
+    
+    for client in connected_clients:
+        if client.username == username:
+            await send_message_to_user(writer, f"{client.username} is already logged in")
+            return (access_granted, "Unknown") 
+        
     access_granted = await check_password_correct(reader, writer, client)
     
     if access_granted:
